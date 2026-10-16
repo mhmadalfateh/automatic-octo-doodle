@@ -1,0 +1,96 @@
+name: Build APK Automatically
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Find and extract any ZIP automatically
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/zip-search
+          FOUND=""
+
+          while IFS= read -r -d '' ZIP; do
+            echo "Checking ZIP: $ZIP"
+
+            rm -rf /tmp/zip-search/*
+            if ! unzip -oq "$ZIP" -d /tmp/zip-search 2>/dev/null; then
+              continue
+            fi
+
+            PACKAGE=$(find /tmp/zip-search \
+              -type f -name package.json \
+              ! -path '*/node_modules/*' | head -n 1 || true)
+
+            if [ -n "$PACKAGE" ]; then
+              PROJECT_DIR="$(dirname "$PACKAGE")"
+
+              if [ -f "$PROJECT_DIR/capacitor.config.json" ] &&
+                 [ -f "$PROJECT_DIR/www/index.html" ]; then
+                FOUND="$PROJECT_DIR"
+                echo "Valid project found in: $ZIP"
+                break
+              fi
+            fi
+          done < <(find "$GITHUB_WORKSPACE" \
+            -maxdepth 4 -type f -iname '*.zip' \
+            -print0)
+
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: No ZIP containing a valid Capacitor project was found."
+            exit 1
+          fi
+
+          cp -a "$FOUND"/. "$GITHUB_WORKSPACE"/
+
+          test -f package.json
+          test -f capacitor.config.json
+          test -f www/index.html
+
+          echo "ZIP extracted automatically."
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Prepare Android
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Daftar-Al-Aqarat-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
